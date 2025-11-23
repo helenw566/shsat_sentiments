@@ -1,3 +1,10 @@
+# Data
+/temp_data
+/data
+*.csv
+*.env
+.env
+
 # History files
 .Rhistory
 .Rapp.history

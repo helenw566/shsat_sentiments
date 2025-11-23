@@ -1,0 +1,163 @@
+---
+title: "03_text_analysis"
+author: "Helen Wang"
+date: "2025-10-28"
+output: html_document
+---
+
+# Library
+
+```{r}
+pacman::p_load(
+  dplyr,
+  tidyr,
+  ggplot2,
+  word2vec,
+  stringr,
+  tidytext
+)
+```
+
+# Reading in Files
+
+```{r}
+df <- read.csv("../data/scraping_results.csv", na.strings = "")
+```
+
+# Word Embeddings
+
+Choose CBOW as it works better for smaller dataset--risks overfitting for frequent words but low risk of that with headlines
+
+### Preprocessing
+
+```{r}
+df <- df %>%
+  mutate(
+    text_id = row.names(.)
+  ) 
+
+cleaned_text <- df %>%
+  mutate(
+    text = headline %>% 
+      tolower() %>% 
+      str_squish() %>%
+      str_remove_all("[[:punct:]]") %>%
+      str_remove_all("[0-9]")
+    ) %>%
+  filter(text != "")
+
+#top words
+top_words <- cleaned_text %>% 
+  unnest_tokens(words, text) %>%
+  count(words) %>%
+  arrange(desc(n)) 
+
+#words that appear across both periods
+period_words <- cleaned_text %>%
+  filter(!is.na(year)) %>%
+  mutate(
+    post2018 = year > as.Date("2018-01-01")
+  ) %>%
+  unnest_tokens(words, text) %>%
+  group_by(post2018) %>% 
+  count(words) %>%
+  arrange(desc(n)) %>%
+  pivot_wider(
+    names_from = post2018,
+    values_from = n
+  ) %>% 
+  filter(!is.na(`TRUE`) & !is.na(`FALSE`))
+
+
+```
+
+### Continious Bag of Words
+
+```{r}
+#model
+cbow_mod <- word2vec(x = cleaned_text$text, type = "cbow", iter = 200)
+
+#check a handful of words
+predict(cbow_mod, c("shsat"), type = "nearest", top_n = 5)
+
+#embeddings matrix
+cbow_matrix <- as.matrix(cbow_mod) %>% as.data.frame()
+
+cbow_matrix_log <- cbow_matrix %>%
+  mutate(words = row.names(.)) %>%
+  pivot_longer(
+    !words,
+    names_to = "Feature",
+    values_to = "Value"
+  ) 
+
+temp <- cbow_matrix_log %>%
+  select(words) %>%
+  unique() %>%
+  merge(top_words, by = "words", all.x = T) %>%
+  filter(!is.na(n)) %>%
+  arrange(desc(n))
+
+ggplot(cbow_matrix_log %>% filter(words %in% temp$words[1:50]), 
+       aes(x = words, y = Feature, fill = Value)) +
+  geom_tile() +
+  coord_flip() +
+  theme(legend.position = "none") +
+  scale_fill_gradient(low = "white", high = "red") +
+  theme(
+    axis.text.x = element_text(angle= 90)
+  ) +
+  labs(
+    x = "Words",
+    title = "Word Embeddings"
+  )
+```
+
+### Semantic Shift with 3 periods
+
+```{r}
+plot_list <- list()
+
+for (period in c("Eric Adams", "Michael Bloomberg", "Bill de Blasio")) {
+  
+  #cbow model
+  mod <- word2vec(x = cleaned_text %>% filter(mayor == period) %>% pull(text), type = "cbow", iter = 20)
+
+  #embeddings matrix
+  c_matrix <- as.matrix(mod) %>% as.data.frame()
+  
+  c_matrix_log <- c_matrix %>%
+    mutate(words = row.names(.)) %>%
+    pivot_longer(
+      !words,
+      names_to = "Feature",
+      values_to = "Value"
+    ) 
+  
+  plot_title <- paste0("Word Embeddings during ", period)
+  
+  cbow_plot <- ggplot(c_matrix_log %>% filter(words %in% temp$words[1:50]), 
+         aes(x = words, y = Feature, fill = Value)) +
+    geom_tile() +
+    coord_flip() +
+    theme(legend.position = "none") +
+    scale_fill_gradient(low = "white", high = "red") +
+    theme(
+      axis.text.x = element_text(angle= 90)
+    ) +
+    labs(
+      x = "Words",
+      title = plot_title
+    )
+  
+  #print
+  print(period)
+  print(cbow_plot)
+  
+  #add to list
+  plot_list <- append(plot_list, cbow_plot)
+}
+
+
+```
+

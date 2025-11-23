@@ -1,0 +1,685 @@
+---
+title: "03_analysis"
+author: "Helen Wang"
+date: "2025-11-16"
+output: html_document
+---
+
+#### Library
+
+```{r}
+#load packages
+pacman::p_load(
+  dplyr,
+  tidyr,
+  purrr,
+  quanteda,
+  text2vec,
+  tibble,
+  vegan,
+  ggplot2,
+  wordvector,
+  parallel,
+  Rtsne,
+  ggrepel
+)
+
+source("functions.R")
+```
+
+#### Reading in Files
+
+```{r}
+#read in files
+df <- read.csv("../data/scraping_results.csv", na.strings = "")
+```
+
+#### Preprocessing
+
+```{r}
+#add text id and indicator var for time period
+df <- df %>%
+  mutate(
+    text_id = row.names(.),
+    post2018 = year > as.Date("2017-01-01")
+  ) %>%
+  #drop rows without year
+  filter(!is.na(year))
+
+#check distributions
+table(df$post2018)
+
+#convert to corpus
+news_corpus <- corpus(df, text_field = "full_text")
+
+#n-grams I want to retain
+n_grams_keep <- c(
+  "new york city", "new york", "bill de blasio", "de blasio", 
+  "high school", "high schools", "specialized high schools", 
+  "specialized high school", "specialized schools", "zohran mandani", 
+  "eric adams", "michael bloomberg"
+)
+```
+#### Alignment Method with Boostrap Resampling to Stablilize Results
+
+Using GLOVE since it also handles small corpora better
+
+###### Bootstrap Resampling
+
+```{r, include = FALSE}
+#bootstrap iterations
+total_iter <- 100
+
+#storage
+word_vectors <- vector(mode = "list", length = total_iter)
+names(word_vectors) <- 1:100
+
+master_word_list <- vector(mode = "list", length = total_iter)
+names(master_word_list) <- 1:100
+
+
+#boostrap resample of GLOVE
+
+for (iter in 1:total_iter) {
+  
+  #get dataset
+  pre <- sample_news(df, post = F)
+  post <- sample_news(df, post = T)
+  
+  #preprocess for each time period
+  pre2018_news <- process_corpus(pre, n_grams_keep)
+  post2018_news <- process_corpus(post, n_grams_keep)
+  
+  #identify features that appear in both periods
+  period_words <- shared_words(pre2018_news, post2018_news)
+  
+  #get glove for both periods
+  pre2018_mat_untidy <- glove_matrix(tidy = F, pre2018_news, period_words) 
+  post2018_mat_untidy <- glove_matrix(tidy = F, post2018_news, period_words)
+  
+  #aligning across periods
+  aligned <- procrustes(pre2018_mat_untidy, post2018_mat_untidy)
+  
+  #cleaning up data
+  pre_2018_aligned <- aligned$X %>% 
+    as.data.frame() %>%
+    rename_with(~ gsub("Dim", "V", .x)) %>%
+    mutate(
+      vocab = rownames(.)
+    ) %>%
+    select(vocab, everything()) %>%
+    mutate(period = "Pre 2018")
+
+  post_2018_aligned <- aligned$Yrot %>% 
+    as.data.frame() %>%
+    mutate(
+      vocab = rownames(.)
+    ) %>%
+    select(vocab, everything())  %>%
+    mutate(period = "Post 2018")
+  
+  #append as list
+  word_vectors[[iter]] <- list(
+    pre = pre_2018_aligned,
+    post = post_2018_aligned
+  )
+  
+  master_word_list[[iter]] <- period_words
+}
+```
+
+###### Cosine Similarity for each Iteration
+
+```{r}
+#empty dataframe
+similarity_list <- vector("list", length(word_vectors))
+names(similarity_list) <- 1:length(word_vectors)
+
+#loop to compute
+for (i in 1:length(word_vectors)) {
+  #get word list
+  word_list <- word_vectors[[i]][["pre"]]$vocab
+  
+  iter_results <- lapply(
+    word_list, function(word) {
+      #compute cosine
+      word_sim <- temporal_similarity(
+        word,  word_vectors[[i]][["pre"]], word_vectors[[i]][["post"]]
+      )
+      #tidy results
+      data.frame(
+        word = word,
+        temporal_cosine_similarity = word_sim,
+        iteration = i,
+        stringsAsFactors = F
+      )
+    }
+  )
+  
+  similarity_list[[i]] <- iter_results
+  
+}
+
+#convert list to df
+similarity_df <- bind_rows(similarity_list) 
+```
+
+
+###### Averaging Cosine Similarity Across Vectors
+
+```{r}
+#averages cosine similarity across vectors
+similarity_tidy <- similarity_df %>%
+  pivot_wider(
+    names_from = "word",
+    values_from = "temporal_cosine_similarity"
+  ) %>%
+  select(-iteration) %>%
+  summarise(
+    across(
+      everything(),
+      list(
+         mean = ~ mean(., na.rm = T),
+         se   = ~ sd(., na.rm = T) / sqrt(length(.))
+       ),
+      .names = "{.col}__{.fn}"
+    )
+  ) %>%
+  pivot_longer(
+    everything(),
+    names_to = c("vocab", "variable"),
+    names_sep = "__"
+  ) %>%
+  pivot_wider(
+    names_from = variable,
+    values_from = value
+  ) %>%
+  mutate(
+    ci_lower = mean - 1.96*se,
+    ci_high = mean + 1.96*se
+  )
+
+
+```
+
+
+###### Plotting Cosine Similarity of Words of Interest
+
+```{r}
+#list of words
+top_words <- news_corpus %>% 
+  process_corpus(n_grams_keep) %>% 
+  tokens_remove(stopwords("en")) %>%
+  dfm() %>% 
+  topfeatures(n = 1000)
+
+#pick words based on top words
+words_of_interest <- c(
+  "test", "shsat", "high_school",
+  "specialized_high_schools", "high_schools",
+  "specialized_high_school", "black", "exam",
+  "asian", "hispanic", "latino", "racial",
+  "segregation", "race", "equity", "white",
+  "asian-american", "diversify", "integration",
+  "merit", "segregated", "minority", "meritocracy",
+  "low-income", "african", "minorities", "socioeconomic"
+)
+
+#make sure words of interest or in period words
+words_of_interest <- intersect(words_of_interest, unique(similarity_tidy$vocab))
+
+#plotting cosine similarity
+similarity_tidy %>%
+  filter(vocab %in% words_of_interest) %>%
+  mutate(
+    above_zero = mean > 0 
+  ) %>%
+  ggplot(aes(x = vocab, y = mean, fill = above_zero)) +
+  geom_col() + 
+  geom_point(color = "grey50") +
+  geom_errorbar(
+    aes(
+      ymin = ci_lower, ymax = ci_high
+    ),
+    width = 0.2, color = "grey70"
+  ) +
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    x = "Vocabulary",
+    y = "Average Cosine Similarity across Periods",
+    title = "How Similar are Words Pre- and Post- 2018?"
+  ) +
+  theme(
+    legend.position = "none"
+  ) 
+```
+
+###### Aligning Word Embeddings for TSNE
+
+```{r}
+#only keep words of interest that are in all iterations
+Reduce(intersect, master_word_list)
+
+words_of_interest2 <- c("exams", "hgih_school", "diversity", "black", 
+                        "specialized_high_schools", "hispanic", "racial",
+                        "exam", "specialized_high_school", "shsat"
+                        )
+
+#select pre and post embeddings for reference
+ref_pre <- word_vectors[[1]]["pre"] %>% 
+  as.data.frame() %>% 
+  rename_with(~ gsub("pre.", "", .x)) %>% 
+  filter(vocab %in% words_of_interest2) %>%
+  select(-vocab, -period) %>% 
+  as.matrix()
+ref_post <- word_vectors[[1]]["post"] %>% 
+  as.data.frame() %>%
+  rename_with(~ gsub("post.", "", .x)) %>% 
+  filter(vocab %in% words_of_interest2) %>%
+  select(-vocab, -period) %>% 
+  as.matrix()
+
+#list to store alignments
+pre_aligned <- vector(mode = "list", length = length(word_vectors) - 1)
+post_aligned <- vector(mode = "list", length = length(word_vectors) - 1)
+
+#align all embeddings to ref
+
+for (vec in 2:length(word_vectors)) {
+  
+  #convert to matrix 
+  pre_mat <- word_vectors[[vec]]["pre"] %>% 
+    as.data.frame() %>% 
+    rename_with(~ gsub("pre.", "", .x)) %>% 
+    filter(vocab %in% words_of_interest2) %>%
+    select(-vocab, -period) %>% 
+    as.matrix()
+  
+  post_mat <- word_vectors[[vec]]["post"] %>% 
+    as.data.frame() %>% 
+    rename_with(~ gsub("post.", "", .x)) %>% 
+    filter(vocab %in% words_of_interest2) %>%
+    select(-vocab, -period) %>% 
+    as.matrix()
+  
+  #align and add to list
+  pre_aligned[[vec - 1]] <- procrustes(ref_pre, pre_mat)
+  post_aligned[[vec - 1]] <- procrustes(ref_post, post_mat)
+}
+
+#tidy up results
+
+pre_aligned_df <- data.frame(matrix(nrow = 0, ncol = 4))
+post_aligned_df <- data.frame(matrix(nrow = 0, ncol = 4))
+
+# Pre - 2018
+
+for (i in 1:length(pre_aligned)) {
+  #append ref as well
+  if (i == 1 ) {
+    ref_append <- pre_aligned[[i]]$X %>% 
+      as.data.frame() %>%
+      rename_with(~ gsub("Dim", "V", .x)) %>%
+      mutate(
+        vocab = rownames(.)
+      ) %>%
+      select(vocab, everything()) %>%
+    pivot_longer(
+      !vocab,
+      names_to = "feature",
+      values_to = "value"
+    ) %>%
+    mutate(
+      category = "Reference"
+    )
+    
+    y_append <- pre_aligned[[i]]$Yrot %>% 
+      as.data.frame() %>%
+      rename_with(~ gsub("Dim", "V", .x)) %>%
+      mutate(
+        vocab = rownames(.)
+      ) %>%
+      select(vocab, everything()) %>%
+    pivot_longer(
+      !vocab,
+      names_to = "feature",
+      values_to = "value"
+    ) %>%
+    mutate(
+      category = "Y"
+    )
+    
+    #add to dataframe
+    pre_aligned_df <- rbind(pre_aligned_df, ref_append)
+    pre_aligned_df <- rbind(pre_aligned_df, y_append)
+  } else {
+    
+    y_append <- pre_aligned[[i]]$Yrot %>% 
+      as.data.frame() %>%
+      rename_with(~ gsub("Dim", "V", .x)) %>%
+      mutate(
+        vocab = rownames(.)
+      ) %>%
+      select(vocab, everything()) %>%
+    pivot_longer(
+      !vocab,
+      names_to = "feature",
+      values_to = "value"
+    ) %>%
+    mutate(
+      category = "Y"
+    )
+    
+    #add to dataframe
+    pre_aligned_df <- rbind(pre_aligned_df, y_append)
+  }
+}
+
+# Post - 2018
+
+for (i in 1:length(post_aligned)) {
+  #append ref as well
+  if (i == 1 ) {
+    ref_append <- post_aligned[[i]]$X %>% 
+      as.data.frame() %>%
+      rename_with(~ gsub("Dim", "V", .x)) %>%
+      mutate(
+        vocab = rownames(.)
+      ) %>%
+      select(vocab, everything()) %>%
+    pivot_longer(
+      !vocab,
+      names_to = "feature",
+      values_to = "value"
+    ) %>%
+    mutate(
+      category = "Reference"
+    )
+    
+    y_append <- post_aligned[[i]]$Yrot %>% 
+      as.data.frame() %>%
+      rename_with(~ gsub("Dim", "V", .x)) %>%
+      mutate(
+        vocab = rownames(.)
+      ) %>%
+      select(vocab, everything()) %>%
+    pivot_longer(
+      !vocab,
+      names_to = "feature",
+      values_to = "value"
+    ) %>%
+    mutate(
+      category = "Y"
+    )
+    
+    #add to dataframe
+    post_aligned_df <- rbind(post_aligned_df, ref_append)
+    post_aligned_df <- rbind(post_aligned_df, y_append)
+  } else {
+    
+    y_append <- post_aligned[[i]]$Yrot %>% 
+      as.data.frame() %>%
+      rename_with(~ gsub("Dim", "V", .x)) %>%
+      mutate(
+        vocab = rownames(.)
+      ) %>%
+      select(vocab, everything()) %>%
+    pivot_longer(
+      !vocab,
+      names_to = "feature",
+      values_to = "value"
+    ) %>%
+    mutate(
+      category = "Y"
+    )
+    
+    #add to dataframe
+    post_aligned_df <- rbind(post_aligned_df, y_append)
+  }
+}
+
+```
+
+##### Averaging Aligned Word Embeddings for TSNE
+
+```{r}
+avg_pre_aligned <- pre_aligned_df %>%
+  select(-category) %>%
+  pivot_wider(
+    id_cols = vocab,
+    names_from = feature,
+    values_from = value,
+    values_fn = list
+  ) %>%
+  mutate(across(!vocab, ~ map_dbl(.x, mean)))  %>%
+  rename(rowname = vocab) %>%
+  column_to_rownames()
+
+
+avg_post_aligned <- post_aligned_df %>%
+  select(-category) %>%
+  pivot_wider(
+    id_cols = vocab,
+    names_from = feature,
+    values_from = value,
+    values_fn = list
+  ) %>%
+  mutate(across(!vocab, ~ map_dbl(.x, mean))) %>%
+  rename(rowname = vocab) %>%
+  column_to_rownames()
+
+#converting to 2D
+
+tsne_pre2018 <- avg_pre_aligned %>% as.matrix() %>% Rtsne(dims = 2, perplexity = 2)
+tsne_post2018 <- avg_post_aligned %>% as.matrix() %>% Rtsne(dims = 2, perplexity = 2)
+```
+
+##### Plotting TSNE
+
+```{r}
+#merging them
+tsne_df <- rbind(
+  data.frame(
+    x = tsne_pre2018$Y[,1], y =  tsne_pre2018$Y[,2], word = row.names(avg_pre_aligned), period = "Pre"
+  ), 
+  data.frame(
+    x = tsne_post2018$Y[,1], y =  tsne_post2018$Y[,2], word = row.names(avg_post_aligned), period = "Post"
+  )
+)
+
+#converting to wide form
+tsne_wide <- tsne_df %>% 
+  pivot_wider(names_from = "period", values_from = c(x, y))
+
+#color palette for legend
+palette <- c("Pre 2018" = "blue", "Post 2018" = "red")
+
+#plot in vector space
+tsne_wide %>%
+  ggplot() +
+  geom_label(aes(x = x_Pre, y = y_Pre, label = word, color = "Pre 2018")) +
+  geom_label(aes(x = x_Post, y = y_Post, label = word, color = "Post 2018")) +
+  geom_segment(aes(
+    x = x_Pre, y = y_Pre, xend = x_Post, yend = y_Post,
+  ),
+  linetype = "dashed",
+  color = "grey50",
+  arrow = arrow(length = unit(0.2, "cm"), type = "closed")) +
+  theme_minimal() +
+  labs(
+    x = "X",
+    y = "Y",
+    title = "Mapping Diachronic Semantic Shift",
+    color = "Time Period"
+  ) +
+  scale_color_manual(values = palette)
+
+#alternative plot
+tsne_df %>%
+  mutate(
+    period = factor(period, levels = c("Pre", "Post"))
+  ) %>%
+  ggplot() +
+  geom_label(aes(x = x, y = y, label = word, color = period)) +
+  theme_minimal() +
+  scale_x_continuous(limits = c(-2500, 2500)) +
+  labs(
+    x = "X",
+    y = "Y",
+    title = "Mapping Diachronic Semantic Shift",
+    color = "Time Period"
+  ) +
+  facet_grid(~ period)
+
+```
+
+#### Chronologically trained method
+
+##### WORDS2VEC
+
+```{r}
+#full corpus
+processed_news <- news_corpus %>%
+  tokens(
+    remove_numbers = TRUE,
+    remove_punct = TRUE,
+    remove_symbols = TRUE
+  ) %>%
+  tokens_tolower() %>%
+  tokens_compound(pattern = phrase(n_grams_keep)) 
+
+#train on pull corpus
+full_wv <- textmodel_word2vec(processed_news, 
+                   dim = 50,
+                   min_count = 0, 
+                   window = 6,
+                   iters = 15
+                   )
+
+#first slice
+wv_pre <- textmodel_word2vec(pre2018_news, 
+                   model = full_wv,
+                   dim = 50,
+                   min_count = 0, 
+                   window = 6,
+                   iters = 15
+                   )
+#second slice
+wv_post <- textmodel_word2vec(post2018_news,
+                    model = wv_pre,
+                    dim = 50,
+                    min_count = 0, 
+                    window = 6,
+                    iters = 15
+                    )
+
+#compute cosine similarity
+temporal_similarity2 <- function(word) {
+  #create matrixes
+  pre_mat <- matrix(wv_pre$values[word,], nrow = 1)
+  post_mat <- matrix(wv_post$values[word,], nrow = 1)
+  #compute similarity
+  cos <- sim2(pre_mat, post_mat, method = "cosine")
+  
+  return(cos)
+}
+
+#empty dataframe
+simil_df2 <- data.frame(matrix(nrow = 0, ncol = 2))
+
+#loop to compute
+for (word in top_words) {
+  row <- c(word, temporal_similarity2(word))
+  simil_df2 <- rbind(simil_df2, row)
+}
+
+#rename columns
+colnames(simil_df2) <- c("vocab", "temporal_cosine_similarity")
+
+#plotting cosine similarity
+simil_df2 %>%
+  filter(vocab %in% words_of_interest) %>%
+  mutate(
+    temporal_cosine_similarity = as.numeric(temporal_cosine_similarity),
+    similar = temporal_cosine_similarity > 0
+  ) %>%
+  ggplot(aes(x = vocab, y = temporal_cosine_similarity, fill = similar)) +
+  geom_col() + 
+  coord_flip() +
+  theme_minimal() +
+  labs(
+    x = "Vocabulary",
+    y = "Temporal Cosine Similarity",
+    title = "How Similar are Words Pre- and Post- 2018?"
+  ) +
+  theme(
+    legend.position = "none"
+  ) 
+
+```
+
+##### Visualzing Word Embeddings
+
+```{r}
+#putting vectors into 2D space
+tsne_pre <- wv_pre$values[c(words_of_interest_2), ] %>% Rtsne(dims = 2, perplexity = 3)
+
+tsne_post <- wv_post$values[c(words_of_interest_2), ] %>% Rtsne(dims = 2, perplexity = 3)
+
+#merging them
+tsne_df2 <- rbind(
+  data.frame(
+    x = tsne_pre$Y[,1], y =  tsne_pre$Y[,2], word = words_of_interest_2, period = "Pre"
+  ), 
+  data.frame(
+    x = tsne_post$Y[,1], y =  tsne_post$Y[,2], word = words_of_interest_2, period = "Post"
+  )
+)
+
+#converting to wide form
+tsne_wide2 <- tsne_df2 %>% 
+  pivot_wider(names_from = "period", values_from = c(x, y))
+
+
+#plot into vector space
+tsne_wide2 %>%
+  ggplot() +
+  geom_label(aes(x = x_Pre, y = y_Pre, label = word, color = "Pre 2018")) +
+  geom_label(aes(x = x_Post, y = y_Post, label = word, color = "Post 2018")) +
+  geom_segment(aes(
+    x = x_Pre, y = y_Pre, xend = x_Post, yend = y_Post,
+  ),
+  linetype = "dashed",
+  color = "grey50",
+  arrow = arrow(length = unit(0.1, "cm"), type = "closed")) +
+  theme_minimal() +
+  labs(
+    x = "X",
+    y = "Y",
+    title = "Mapping Diachronic Semantic Shift",
+    color = "Time Period"
+  ) +
+  scale_color_manual(values = palette)
+
+#alternative plot
+tsne_df2 %>%
+  filter(word %in% words_of_interest_2) %>%
+  ggplot() +
+  geom_label(aes(x = x, y = y, label = word, color = period)) +
+  theme_minimal() +
+  scale_x_continuous(limits = c(-2500, 2500)) +
+  labs(
+    x = "X",
+    y = "Y",
+    title = "Mapping Diachronic Semantic Shift",
+    color = "Time Period"
+  ) +
+  facet_grid(~ period)
+```
+
+
+
+
+
+
