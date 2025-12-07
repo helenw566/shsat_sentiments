@@ -1,0 +1,225 @@
+---
+title: "05_stance_analysis"
+author: "Helen Wang"
+date: "2025-12-02"
+output: html_document
+---
+
+#### Library
+
+```{r}
+pacman::p_load(
+  dplyr,
+  tidyr,
+  tibble,
+  ggplot2,
+  stringr,
+  irr
+)
+```
+
+#### Read in Files
+
+```{r}
+#model results
+stance <- read.csv("../data/stance_detection_df.csv")
+
+#coder
+coder1 <- read.csv("../validation/validation_coder1.csv") %>% setNames(c("text_id", "full_text", "coder1"))
+coder2 <- read.csv("../validation/validation_coder2.csv") %>% setNames(c("text_id", "full_text", "coder2"))
+coder3 <- read.csv("../validation/validation_coder3.csv") %>% setNames(c("text_id", "full_text", "coder3"))
+```
+
+#### Plotting
+
+```{r}
+stance_plot_df <- stance %>%
+  select(text_id, post2018, max) %>%
+  pivot_wider(
+    names_from = "max",
+    values_from = "max"
+  ) %>%
+  mutate(across(positive:negative, ~ ifelse(is.na(.), 0, 1))) %>%
+  pivot_longer(
+    !c(text_id, post2018),
+    names_to = "stance",
+    values_to = "val"
+  ) %>%
+  group_by(post2018) %>%
+  mutate(tot = n_distinct(text_id)) %>%
+  group_by(post2018, stance) %>%
+  summarise(n = sum(val),
+            tot = unique(tot),
+            .groups = "drop") %>%
+  mutate(
+    percent = (n/tot)*100,
+    percent = round(percent, 2)
+  ) %>%
+  mutate(
+    stance = ifelse(
+      stance == "positive", "Positive",
+      ifelse(
+        stance == "negative", "Negative", "Neutral"
+      )
+    ),
+    post2018 = ifelse(post2018 == "True", "Post 2018", "Pre 2018")
+  ) 
+
+stance_plot_df %>%
+  mutate(post2018 = factor(post2018, levels = c("Pre 2018", "Post 2018"))) %>%
+  ggplot(aes(x = stance, y = percent, fill = stance)) +
+  geom_col(alpha = 0.5) +
+  coord_flip() +
+  facet_grid(~post2018) +
+  theme_minimal() +
+  labs(
+    x = "Stance on SHSAT",
+    y = "Percent (%)",
+    title = "Change in Stance towards SHSAT over Time",
+    fill = "Stance"
+  ) +
+  theme(
+    legend.position = "none"
+  ) +
+  scale_fill_manual(values = c("#619CFF", "#00BA38", "#F8766D")) +
+  scale_y_continuous(limits = c(0, 100)) +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+  
+```
+#### Odds Ratio
+
+```{r}
+stance_df <- stance %>% 
+  mutate(
+    max = factor(max, levels = c("neutral", "positive", "negative")),
+    post2018 = ifelse(post2018 == "True",  1, 0)
+  )
+
+mod1 <- glm(post2018 ~ max, data = stance_df, family = binomial) %>% summary()
+
+mod2 <- glm(post2018 ~ max + source, data = stance_df, family = binomial) %>% summary()
+
+forest_plot_df_1 <- coef(mod1) %>% 
+  as.data.frame() %>%
+  rownames_to_column() %>%
+  setNames(c("variable", "estimate", "se", "zval", "pval")) %>%
+  mutate(
+    odds_ratio = exp(estimate),
+    ci_low = estimate - 1.96*se,
+    ci_high = estimate + 1.96*se,
+    variable = ifelse(variable == "maxnegative", "Negative", 
+                      ifelse(variable == "maxpositive", "Positive", "Intercept"))
+  ) %>%
+  mutate(across(estimate:ci_high, ~ round(., 3))) %>%
+  filter(variable != "Intercept") %>%
+  mutate(model = "Without Covariates")
+
+forest_plot_df_2 <- coef(mod2) %>% 
+  as.data.frame() %>%
+  rownames_to_column() %>%
+  setNames(c("variable", "estimate", "se", "zval", "pval")) %>%
+  mutate(
+    odds_ratio = exp(estimate),
+    ci_low = estimate - 1.96*se,
+    ci_high = estimate + 1.96*se,
+    variable = gsub("max|source", "", variable),
+    variable = str_to_title(variable)
+  ) %>%
+  mutate(across(estimate:ci_high, ~ round(., 3))) %>%
+  filter(variable != "(Intercept)") %>%
+  mutate(
+    model = "With Covariates"
+  )
+
+ggplot(
+  rbind(forest_plot_df_1, forest_plot_df_2) %>% mutate(signif = pval < 0.05), 
+  aes(y = estimate, x = variable)
+) +
+  geom_pointrange(aes(ymin = ci_low, ymax = ci_high)) +
+  geom_point(aes(col = signif)) +
+  coord_flip() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  theme_minimal() +
+  labs(
+    x = "Variable",
+    y = "Odds Ratio",
+    title = "Odds of SHSAT Stances Post 2018",
+    col = "Significance"
+  ) + 
+  facet_grid(~model, scales = "free") +
+  scale_color_manual(values = c("black", "#F8766D")) +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )
+```
+### Confusion Matrix
+
+```{r}
+#compute kappa
+kappa_df <- coder1 %>%
+  merge(coder2, by = c("text_id", "full_text"), all.x = T) %>%
+  merge(coder3, by = c("text_id", "full_text"), all.x = T)
+
+
+kappam.fleiss(kappa_df %>% select(starts_with("coder"))) #moderate agreement: 0.465
+
+#get "average" of human coders
+categorical_mode <- function(x) {
+  cross_tab <- table(x %>% t() %>% as.vector())
+  #get mode
+  answer <- names(cross_tab[cross_tab == max(cross_tab)])
+  #check if there are multiple answers
+  if (length(answer) != 1) {
+    return("Error")
+  } else {
+    return(answer)
+  }
+}
+
+kappa_df <- kappa_df %>%
+  rowwise() %>%
+  mutate(
+    coder = categorical_mode(c_across(coder1:coder3)),
+    #if all 3 disagree, replace with coder 1 (me)
+    coder = ifelse(coder == "Error", coder1, coder) 
+  )
+
+#compare human coder with model
+comparision <- kappa_df %>%
+  mutate(
+    coder = tolower(coder)
+  ) %>%
+  select(text_id, coder) %>%
+  merge(
+    stance %>% select(text_id, model = max),
+    by = "text_id",
+    all.x = T
+  ) 
+
+table(comparision$model, comparision$coder, dnn = list("model", "coder")) %>%
+  as.data.frame() %>%
+  ggplot(aes(x = model, y = coder, fill = log(Freq))) +
+  geom_tile(color = "white") +
+  geom_text(aes(label = Freq), col = "black") +
+  scale_fill_gradient(low = "white", high = "#619CFF") +
+  labs(
+    x = "Off the Shelf Classifer",
+    y = "Average of Human Coder",
+    title = "Confusion Matrix",
+    caption = "Note: Validation was Conducted with a Random Sample of 200 Documents and 3 Individual Coders"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    plot.title = element_text(hjust = 0.5)
+  )
+
+mod_results <- factor(comparision$model)
+coder_results <- factor(comparision$coder)
+caret::confusionMatrix(mod_results, coder_results)
+```
+
+
+

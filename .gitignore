@@ -1,6 +1,7 @@
 # Data
 /temp_data
 /data
+/validation
 *.csv
 *.env
 .env

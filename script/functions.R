@@ -37,7 +37,7 @@ sample_news <- function(df, post = T) {
   if (post == T) {
     period <- df %>% filter(post2018 == FALSE)
   } else if (post == F) {
-    period <- df %>% filter(post2018 == FALSE)
+    period <- df %>% filter(post2018 == TRUE)
   }
   
   #resample for text ids
@@ -118,10 +118,15 @@ glove_matrix <- function(tidy = T, df, period_words) {
 
 # Cosine Similarity -------------------------------------------------------
 
-temporal_similarity <- function(word, pre_mat, post_mat) {
-  #get word vectors for word
-  pre <- as.numeric(pre_mat[word, ] %>% select(-vocab, -period))
-  post <- as.numeric(post_mat[word, ] %>% select(-vocab, -period))
+temporal_similarity <- function(word, pre_input, post_input, method) {
+  #
+  if (method == "aligned") {
+    pre <- as.numeric(pre_input[word, ] %>% select(-vocab, -period))
+    post <- as.numeric(post_input[word, ] %>% select(-vocab, -period))
+  } else if (method == "chrono") {
+    pre <- pre_input$values[word,]
+    post <- post_input$values[word,]
+  }
   
   #compute similarity
   score <- sim2(
@@ -132,5 +137,141 @@ temporal_similarity <- function(word, pre_mat, post_mat) {
   
   return(score)
 }
+
+comb_simil_df_tidy_2 %>%
+  mutate(shsat = ifelse(stringr::str_detect(word_combo, "shsat"), 1, 0)) %>%
+  filter(shsat == 1) %>%
+  ggplot() +
+  geom_point(aes(y = word_combo, x = pre, col = "Pre 2018")) +
+  geom_point(aes(y = word_combo, x = post, col = "Post 2018")) +
+  geom_segment(aes(y = word_combo, yend = word_combo,
+                   x = pre, xend = post),
+               color = "grey30",
+               arrow = arrow(length = unit(1, "mm"))) +
+  theme_minimal() +
+  labs(
+    x = "Change in Cosine Similarity",
+    y = "",
+    title = "Change in Cosine Similarity to SHSAT",
+    colour = "Time Period",
+    caption = "Chronologically Trained Model"
+  ) +
+  scale_color_manual(values = palette) +
+  scale_x_continuous(limits = c(0, 1))  +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")
+  )
+
+
+comb_simil_df_tidy_2 %>%
+  mutate(shsat = ifelse(stringr::str_detect(word_combo, "equity"), 1, 0)) %>%
+  filter(shsat == 1) %>%
+  ggplot() +
+  geom_point(aes(y = word_combo, x = pre, col = "Pre 2018")) +
+  geom_point(aes(y = word_combo, x = post, col = "Post 2018")) +
+  geom_segment(aes(y = word_combo, yend = word_combo,
+                   x = pre, xend = post),
+               color = "grey30",
+               arrow = arrow(length = unit(1, "mm"))) +
+  theme_minimal() +
+  labs(
+    x = "Change in Cosine Similarity",
+    y = "",
+    title = "Change in Cosine Similarity to Equity",
+    colour = "Time Period",
+    caption = "Chronologically Trained Model"
+  ) +
+  scale_color_manual(values = palette) +
+  scale_x_continuous(limits = c(0, 1))  +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")
+  )
+
+comb_simil_df_tidy_2 %>%
+  mutate(shsat = ifelse(stringr::str_detect(word_combo, "shsat"), 1, 0)) %>%
+  filter(shsat == 1) %>%
+  ggplot() +
+  geom_point(aes(y = word_combo, x = pre, col = "Pre 2018")) +
+  geom_point(aes(y = word_combo, x = post, col = "Post 2018")) +
+  geom_segment(aes(y = word_combo, yend = word_combo,
+                   x = pre, xend = post),
+               color = "grey30",
+               arrow = arrow(length = unit(1, "mm"))) +
+  theme_minimal() +
+  labs(
+    x = "Change in Cosine Similarity",
+    y = "",
+    title = "Change in Cosine Similarity to SHSAT",
+    colour = "Time Period",
+    caption = "Chronologically Trained Model"
+  ) +
+  scale_color_manual(values = palette) +
+  scale_x_continuous(limits = c(0, 1))  +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")
+  )
+
+
+comb_simil_df_tidy_2 %>%
+  mutate(shsat = ifelse(stringr::str_detect(word_combo, "merit"), 1, 0)) %>%
+  filter(shsat == 1) %>%
+  ggplot() +
+  geom_point(aes(y = word_combo, x = pre, col = "Pre 2018")) +
+  geom_point(aes(y = word_combo, x = post, col = "Post 2018")) +
+  geom_segment(aes(y = word_combo, yend = word_combo,
+                   x = pre, xend = post),
+               color = "grey30",
+               arrow = arrow(length = unit(1, "mm"))) +
+  theme_minimal() +
+  labs(
+    x = "Change in Cosine Similarity",
+    y = "",
+    title = "Change in Cosine Similarity to Merit",
+    colour = "Time Period",
+    caption = "Chronologically Trained Model"
+  ) +
+  scale_color_manual(values = palette) +
+  scale_x_continuous(limits = c(0, 1))  +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5, face = "italic")
+  )
+
+cos_similarity_plot <- function(data, word) {
+  #plots change in
+  #cosine similarity
+  #for given word
+  #combos
+  return_plot <- data %>%
+    mutate(shsat = ifelse(stringr::str_detect(word_combo, word), 1, 0)) %>%
+    filter(shsat == 1) %>%
+    ggplot() +
+    geom_point(aes(y = word_combo, x = pre, col = "Pre 2018")) +
+    geom_point(aes(y = word_combo, x = post, col = "Post 2018")) +
+    geom_segment(aes(y = word_combo, yend = word_combo,
+                     x = pre, xend = post),
+                 color = "grey30",
+                 arrow = arrow(length = unit(1, "mm"))) +
+    theme_minimal() +
+    labs(
+      x = "Cosine Similarity",
+      y = "",
+      title = bquote("Change in Cosine Similarity to " * italic(.(word))),
+      colour = "Time Period",
+      caption = "Chronologically Trained Model"
+    ) +
+    scale_color_manual(values = palette) +
+    scale_x_continuous(limits = c(0, 1))  +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5, face = "italic")
+    )
+  
+  return(return_plot)
+}
+
 
 
