@@ -95,7 +95,8 @@ stance_df <- stance %>%
   mutate(
     max = factor(max, levels = c("neutral", "positive", "negative")),
     post2018 = ifelse(post2018 == "True",  1, 0)
-  )
+  ) 
+  
 
 mod1 <- glm(post2018 ~ max, data = stance_df, family = binomial) %>% summary()
 

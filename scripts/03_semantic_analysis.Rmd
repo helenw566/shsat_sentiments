@@ -786,7 +786,7 @@ chrono_similarity_tidy %>%
   scale_fill_manual(values = c("#52d8da", "#fbaca7"))
 
 
-similarity_tidy %>%
+combined_simil_tidy <- similarity_tidy %>%
   filter(vocab %in% words_of_interest) %>%
   mutate(
     above_zero = mean > 0 
@@ -800,7 +800,9 @@ similarity_tidy %>%
         above_zero = mean > 0,
         model = "Chronologically Trained Model"
       ) 
-  ) %>%
+  ) 
+
+combined_simil_tidy %>%
   ggplot(aes(x = vocab, y = mean, fill = above_zero)) +
   geom_col() + 
   geom_point(color = "grey50") +
@@ -827,6 +829,12 @@ similarity_tidy %>%
     plot.title = element_text(hjust = 0.5, face = "bold"),
     plot.subtitle = element_text(hjust = 0.5, face = "italic")
   )
+
+
+combined_simil_tidy %>%
+  group_by(model) %>%
+  summarise(mean_simil = mean(mean, na.rm = T),
+            se_simil = mean(se, na.rm = T))
 
 ```
 
@@ -1055,8 +1063,65 @@ comb_simil_df_tidy_2 %>%
       plot.subtitle = element_text(hjust = 0.5, face = "italic")
     )
 
+#change in cosine similarity for specific words
 for (word in c("shsat", "exam", "equity", "race","diversify", "merit")) {
   print(cos_similarity_plot(comb_simil_df_tidy_2, word))
 }
+
+#highest cosine similarity changes
+comb_simil_df_tidy_2 %>%
+  mutate(
+    change = post - pre,
+    change = abs(change)
+  ) %>%
+  arrange(desc(change)) %>%
+  head(25) %>%
+  ggplot() +
+  geom_point(aes(y = word_combo, x = pre, col = "Pre 2018")) +
+  geom_point(aes(y = word_combo, x = post, col = "Post 2018")) +
+  geom_segment(aes(y = word_combo, yend = word_combo,
+                   x = pre, xend = post),
+               color = "grey30",
+               arrow = arrow(length = unit(1, "mm"))) +
+  theme_minimal() +
+  labs(
+    x = "Cosine Similarity",
+    y = "",
+    title = "Change in Cosine Similarity across Periods",
+    colour = "Period"
+  ) +
+  scale_color_manual(values = palette) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5, face = "italic")
+    )
+
+#lowest cosine similarity changes
+comb_simil_df_tidy_2 %>%
+  mutate(
+    change = post - pre,
+    change = abs(change)
+  ) %>%
+  arrange(desc(change)) %>%
+  tail(25) %>%
+  ggplot() +
+  geom_point(aes(y = word_combo, x = pre, col = "Pre 2018")) +
+  geom_point(aes(y = word_combo, x = post, col = "Post 2018")) +
+  geom_segment(aes(y = word_combo, yend = word_combo,
+                   x = pre, xend = post),
+               color = "grey30",
+               arrow = arrow(length = unit(1, "mm"))) +
+  theme_minimal() +
+  labs(
+    x = "Cosine Similarity",
+    y = "",
+    title = "Change in Cosine Similarity across Periods",
+    colour = "Period"
+  ) +
+  scale_color_manual(values = palette) +
+    theme(
+      plot.title = element_text(hjust = 0.5, face = "bold"),
+      plot.subtitle = element_text(hjust = 0.5, face = "italic")
+    )
 ```
 
