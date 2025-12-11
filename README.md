@@ -9,7 +9,7 @@ Helen Wang (@helenw566, email: hw566@georgetown.edu)
 > 2.	Stance Detection using off-the-shelf Classifers and manual hand valdidation.
 
 
-#### Reposiory Contents
+#### Repository Contents
 
 This repository contains the following folders: 
 
