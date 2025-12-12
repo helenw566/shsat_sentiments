@@ -36,7 +36,7 @@ This folder contains all the .ipynb and .rmd files used to scrap data, preproces
 - `03_semantic analysis.rmd`: This script runs the diachronic semantic analysis, including the exploration of two different approaches, implementation of bootstrap resampling, and graph production.
 - `04_stance_detection.ipynb`: This script calls the off-the-shelf classifer for stance detection, including aggregation of stance detection for multiple target words.
 - `05_stance_analysis.rmd`: This scripts run rudimentary models and EDA for the stance detection, computes kappa for hand validation, and compares model performance to human performance.
-- `functions.R`: This contains all the self-made functions used for `03_structural_topic_modeling.rmd` and `04_networks.rmd`.
+- `functions.R`: This contains all the self-made functions used for `03_semantic analysis.rmd`.
 
 #### Proposal
 
